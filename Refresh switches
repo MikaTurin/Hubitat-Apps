@@ -1,0 +1,155 @@
+/**
+ *  Refresh statuses
+ *
+ *  Copyright 2019 Mark Hutchings
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ *  in compliance with the License. You may obtain a copy of the License at:
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+ *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
+ *  for the specific language governing permissions and limitations under the License.
+ *
+ */
+definition(
+    name: "Refresh status",
+    namespace: "mhutchy",
+    author: "Mark Hutchings",
+    description: "Refresh status of devices on regular basis",
+    category: "Convenience",
+    iconUrl: "http://cdn.device-icons.smartthings.com/Outdoor/outdoor12-icn.png",
+    iconX2Url: "http://cdn.device-icons.smartthings.com/Outdoor/outdoor12-icn@2x.png",
+    iconX3Url: "http://cdn.device-icons.smartthings.com/Outdoor/outdoor12-icn@2x.png")
+
+
+preferences {
+
+    section	("Switches"){
+    	input "switches", "capability.switch", title: "Switch to be refreshed", multiple: true, required: true
+				
+        }
+         
+	section ("Regularity"){
+		
+		input(name: "updateFrequency", type: "enum", title: "Update frequency", description: "How often to poll device for updates in minutes", options:["1","5","10","30"], required: true, defaultValue: 1)
+		input "manualButton", "capability.pushableButton", title: "Button to run refresh imediately", required: false
+        
+
+		
+	}
+
+     
+
+        section ("Notifications"){
+    	input "notification", "bool", title: "Send a push notification to smartphone", multiple: false, required: true
+	 	input "notificationDevice", "capability.notification", title: "Notification Device", multiple: true, required: false
+		input "SMSMessage", "bool", title: "Send an SMS notification", multiple: false, required: true
+        input "SMSNumber", "string", title: "phone number for text message", multiple: true, required: false
+        
+         }
+    section ("App preferences"){
+     	input(name: "detailedLog", type: "bool", title: "Detailed logging", description: "Detailed logging", displayDuringSetup: true, required: true)
+		
+     }
+}
+
+def installed() {
+	log.debug "$app.label : Installed with settings: ${settings}"
+    
+	unsubscribe()
+	unschedule ()
+	initialize()
+   
+}
+
+def updated() {
+	log.debug "$app.label : Updated with settings: ${settings}"
+
+	unsubscribe()
+	unschedule ()
+	initialize()
+    
+
+}
+
+def initialize() {
+	log.debug "$app.label : Initialised ${settings}"
+	if (manualButton) {
+		subscribe (manualButton, "pushed", manual)
+	}
+   if (!updateFrequency) {runEvery1Minutes(update)
+   		if (detailedLog) {log.debug "$switches.displayName no updateFrequency set defaulting to every minute"}
+        }
+   else if (updateFrequency == "1")  {runEvery1Minute(update)
+   		if (detailedLog) {log.debug "$switches.displayName updating every minute"}
+        }
+   else if (updateFrequency == "5")  {runEvery5Minutes(update)
+   		if (detailedLog) {log.debug "$switches.displayName updating every 5 minutes"}
+        }
+   else if (updateFrequency == "10") {runEvery10Minutes(update)
+   		if (detailedLog) {log.debug "$switches.displayName updating every 10 minutes"}
+        }   
+   else if (updateFrequency == "30") {runEvery30Minutes(update)
+   		if (detailedLog) {log.debug "$switches.displayName updating every 30 minutes"}
+        } 
+
+        
+ }
+
+def manual (evt){
+	if (evt.value == "1"){
+		logDebug ("Manual refresh requested")
+		update ()
+	}
+	else if (evt.value == "2"){
+		logDebug ("Forcing stuck value")
+		state.before = switches.currentSwitch
+		if (state.before[1] == "on"){
+			state.before[1] = "off"
+		}
+		else {
+			state.before[1] = "on"
+		}
+		logDebug ("changing state.before from $switches.currentSwitch to $state.before")
+		checkStatus ()
+	}
+}
+		
+
+def update (evt) {
+	state.before = switches.currentSwitch
+	logDebug ("Refreshing ${switches.displayName} current status ${state.before}")
+	switches.refresh()
+	runIn (5, checkStatus)
+}
+
+def checkStatus () {
+	logDebug "Refreshed ${switches.displayName} now ${switches.currentSwitch}"
+	if (state.before != switches.currentSwitch){
+		logDebug "Switch state error - ${switches.displayName} was $state.before, should be $switches.currentSwitch"
+		
+			
+		for (int i = 0; i < switches.size(); i++){
+    
+        	if (switches[i].currentSwitch != state.before[i]) {
+				log.warn ("${switches[i].displayName} fault - Showing '${state.before[i]}' instead of '${switches[i].currentSwitch}'")
+				if (notification) {
+					logDebug ("Sending notification to $notificationDevice.displayName")
+					notificationDevice.deviceNotification("${switches[i].displayName} fault - Showing '${state.before[i]}' instead of '${switches[i].currentSwitch}'")
+				}
+	
+            }	
+		}
+			
+			
+			
+	}
+}
+
+def logDebug (text) {
+	if (text){
+    	log.debug "$app.label : $text"
+        }
+    }
