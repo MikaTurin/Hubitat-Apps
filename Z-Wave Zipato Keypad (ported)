@@ -151,6 +151,7 @@ def refresh() {
     state.registeredUsers = [:]
     // Reset the UI state. This will be re-updated according to reports back from the device.
     for(def i=0; i<10; i++) {
+		debug ("Refreshing userName$i")
 	    sendEvent(name:"rfid$i", value: "unassociated")
         sendEvent(name:"userName$i", value: "User $i")
     }
@@ -213,8 +214,9 @@ private getDateStamp(){
 }
 
 def on(){
+	debug ("Switching on - Currently ${device.currentValue("switch")}")
 	def $dateStamp = getDateStamp()
-    if(device.currentState("switch").value == "off") {
+    if(device.currentValue("switch") != "on") {
         info "Switching mode to away"
         sendEvent(name:"switch", value: "on")
         sendEvent(name:"webCoREPush", value: pushNotifications?"Yes":"No")
@@ -227,8 +229,9 @@ def on(){
 
 
 def off() {
+	debug ("Switching off - Currently ${device.currentValue("switch")}")
 	def $dateStamp = getDateStamp()
-    if(device.currentState("switch").value == "on"){
+    if(device.currentValue("switch") != "off"){
     	info "Switching mode to home"
         sendEvent(name:"switch", value: "off")
 		sendEvent(name:"webCoREPush", value: pushNotifications?"Yes":"No")
@@ -425,18 +428,15 @@ def zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
 	def result = []
     def userNumber = cmd.userIdentifier
 	debug ("cmd = $cmd")
-	debug ("UserCodeReport = $UserCodeReport")
+	debug ("UserCodeReport.USER_ID_STATUS_AVAILABLE_NOT_SET = $UserCodeReport.USER_ID_STATUS_AVAILABLE_NOT_SET")
 	if (cmd.userIdStatus == UserCodeReport.USER_ID_STATUS_AVAILABLE_NOT_SET && userNumber == 0 )
 	{
     	// Turn the master code into a 10-element array
         def zeros = [0,0,0,0,0,0,0,0,0,0]
-		debug ("masterCode = $masterCode")
-        def masterCodeArray = masterCode.getBytes()
+		def masterCodeArray = masterCode.getBytes()
         masterCodeArray = ([].add + masterCodeArray[0..< masterCodeArray.size()] + zeros[masterCodeArray.size()..< zeros.size()]).flatten() 
 		debug ("masterCodeArray = $masterCodeArray")
-		//cmd.user == masterCodeArray
-		
-		
+				
 		
     	if (cmd.userCode == masterCodeArray) {
         	// The master code was entered. Avoid putting the device back to sleep so the user
@@ -455,10 +455,12 @@ def zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
 	}
     else {
     	if (cmd.userIdStatus == UserCodeReport.USER_ID_STATUS_OCCUPIED) {
-            info "Remembering user $userNumber is set to ${cmd.user}"
+            info "Remembering user $userNumber is set to ${cmd.userCode}"
             state.registeredUsers[Integer.toString(userNumber)] = cmd.userCode
+			debug ("sendEvent(name:rfid${userNumber}, value: associated")
             sendEvent(name:"rfid$userNumber", value: "associated")
             def userName = [who1, who2, who3, who4, who5, who6, who7, who8, who9][userNumber - 1]
+			debug ("sendEvent(name:userName${userNumber}, value: $userName")
             sendEvent(name:"userName$userNumber", value: userName)
            
         }
@@ -475,6 +477,7 @@ def zwaveEvent(hubitat.zwave.commands.usercodev1.UserCodeReport cmd) {
 
 private associate(def userNumber){
     def requests = []
+	
     if(state.lastUnrecognisedCode != null){
         
         info "Associating tag number $userNumber with code ${state.lastUnrecognisedCode}"
@@ -484,7 +487,9 @@ private associate(def userNumber){
         // ASCII character corresponding to that decimal value.  For example, a byte with the value of 0 will be converted to 0x30 
         // (decimal 48), ASCII character '0'.  
         // This lead the device to store a corrupted code for the RFID tag, and prevents it from recognising that code.
-        //requests << zwave.userCodeV1.userCodeSet(userIdentifier: userNumber, userIdStatus: UserCodeSet.USER_ID_STATUS_OCCUPIED, user: state.lastUnrecognisedCode).format()
+		
+		debug ("requests << zwave.userCodeV1.userCodeSet(userIdentifier: ${userNumber}, userIdStatus: ${UserCodeSet.USER_ID_STATUS_OCCUPIED}, userCode: ${state.lastUnrecognisedCode}")
+      // requests << zwave.userCodeV1.userCodeSet(userIdentifier: userNumber, userIdStatus: UserCodeSet.USER_ID_STATUS_OCCUPIED, userCode: state.lastUnrecognisedCode).format()
         
         // The only alternative to the above problem is to manually construct the z-wave SET USER command.
         def cmd = [
@@ -499,7 +504,9 @@ private associate(def userNumber){
         // Now request a UserCodeReport. If the device is awake, we will receive it, and update the UI/state accordingly.
         // If it never arrives, it means the device was asleep, and the UserCodeSet was not received either.
         requests << zwave.userCodeV1.userCodeGet(userIdentifier: userNumber).format()
+
         state.lastUnrecognisedCode = null
+		
     }
     else {
     	info "Cannot associate tag number $userNumber because there is no recent code."
