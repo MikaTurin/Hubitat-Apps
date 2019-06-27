@@ -1,5 +1,6 @@
 /**
- *  Water the garden
+ *  Water the garden 
+ *  V2
  *
  *  Copyright 2019 Mark Hutchings
  *
@@ -46,7 +47,8 @@ preferences {
     section ("Automatic watering"){
     	 
         input "startTime", "time", title: "if autoschedule required: Start Time", required: false
-        input "duration", "number", title: "How long to water for (auto and manual modes) (s)", required: true
+        input "duration", "number", title: "How long to water for in minutes", required: true
+		
         }
 	
         
@@ -64,6 +66,7 @@ preferences {
 	 	input "notificationDevice", "capability.notification", title: "Notification Device", multiple: true, required: false
 		input "SMSMessage", "bool", title: "Send an SMS notification", multiple: false, required: true
         input "SMSNumber", "string", title: "phone number for text message", multiple: true, required: false
+		input "speach", "capability.speechSynthesis", title: "Send spoken message", multiple: true, required: false
         
          }
     section ("App preferences"){
@@ -96,8 +99,7 @@ log.debug "$app.label : Initialised ${settings}"
 
    	subscribe (manualSwitch, "switch.on", manual) 
     subscribe (manualButton, "pushed.1", manual) 
-    subscribe (sprinkler, "switch", sendNotification)
-	subscribe (temperature, "temperature", updateTemperatures)
+    subscribe (temperature, "temperature", updateTemperatures)
     if (startTime) {
    		schedule(startTime, "scheduled")
         }
@@ -128,27 +130,33 @@ def manual(evt) {
 }
 
 def updateTemperatures (evt) {
+	
+	def newTemperature = temperature.currentTemperature
+	
 	def today = new Date().format( 'EEEE' )
 	
-	logDebug ("It is $today today, last reading was on $state.readingDay")
+	logDebug ("updateTemperatures handler  evt:$evt.value newTemperature:$newTemperature today:$today state.readingDay:$state.readingDay state.maxTempToday:$state.maxTempToday state.minTempToday:$state.minTempToday")
 	
-	logDebug ("Temperature changes detected - $evt.value")
-	if ((state.maxTempToday == null) || (state.minTempToday == null) || (state.readingDay != today)){
-		logDebug ("initialising max and min temp to $evt.value")
+	
+	if ((!state.maxTempToday) || (!state.minTempToday) || (state.readingDay != today)){
+		logDebug ("initialising max and min temp to $newTemperature")
 		state.maxTempYesterday = state.maxTempToday
 		state.minTempYesterday = state.minTempToday
-		state.maxTempToday = evt.value
-		state.minTempToday = evt.value
+		state.maxTempToday = newTemperature
+		state.minTempToday = newTemperature
+			}
+	
+	if (newTemperature > state.maxTempToday) {
+		logDebug ("Setting max temp from $state.maxTempToday to $newTemperature")
+		state.maxTempToday = newTemperature
 	}
-	if (evt.value > state.maxTempToday) {
-		logDebug ("Setting max temp from $state.maxTempToday to $evt.value")
-		state.maxTempToday = evt.value
+	if (newTemperature < state.minTempToday) {
+		logDebug ("Setting min temp from $state.minTempToday to $newTemperature")
+		state.minTempToday = newTemperature
 	}
-	if (evt.value < state.minTempToday) {
-		logDebug ("Setting min temp from $state.minTempToday to $evt.value")
-		state.minTempToday = evt.value
-	}
-	state.readingDay = today
+
+	state.readingDay = "$today"
+
 }
 
 
@@ -159,7 +167,7 @@ def scheduled (evt) {
 	def sprinklerState = sprinkler.currentValue("switch")
 	
 	
-	logDebug ("Getting Current weather data")		
+	logDebug ("Weather data from openweathermap")		
 	
 	try {
 		httpGet("https://api.openweathermap.org/data/2.5/weather?q=${city},${country}&appid=${apiKey}") { resp ->
@@ -171,9 +179,6 @@ def scheduled (evt) {
 	} catch (e) {
     	log.error "Error getting current data: $e"
 	}
-	
-
-	logDebug ("Getting weather forcast")		
 	
 
 		
@@ -195,6 +200,7 @@ def scheduled (evt) {
 	def forcastMin = weatherForcast.list[0].main.temp
 	
 	for (int i = 0; i < 9; i++) {
+        
 		rainI = weatherForcast.list[i].rain
 		tempI = weatherForcast.list[i].main.temp
 
@@ -205,6 +211,8 @@ def scheduled (evt) {
 			forcastMax = tempI}
 		else if (tempI < forcastMin){
 			forcastMin = tempI}
+        if (!rainAmount) {rainAmount =0}
+        
 		
 		forcastRain = forcastRain + rainAmount
 	}
@@ -218,6 +226,7 @@ def scheduled (evt) {
  	def Rain24H = "$forcastRain"
     
     def Rain1H = weatherForcast.list[0].rain
+    if (!Rain1H) {Rain1H = 0}
 	logDebug "rain 1h ${Rain1H}"
 	if (weatherForcast.list[0].rain != null){
 		logDebug "rain 1h ${Rain1H.get("3h")}"
@@ -237,7 +246,7 @@ def scheduled (evt) {
     def temperatureOK = ((state.maxTempToday as float) >= (maxTemp as float))
     logDebug ("Max temperature today of ${state.maxTempToday}C, ok for watering (>= ${maxTemp}C)? $temperatureOK")
     
-    def veryHot = (state.maxTempToday >= highTemp)
+    def veryHot = ((state.maxTempToday as float) >= (highTemp as float))
     
     def aboveFreezing = (forcastMin >= minTemp)
     logDebug ("Minimum temperature 24h of ${forcastMin}C forcast, Ok for watering (>= ${minTemp}C)? $aboveFreezing")    
@@ -245,8 +254,8 @@ def scheduled (evt) {
     def rain24HourOK = (state.todaysRain <= maxRain24)
 	logDebug ("${state.todaysRain}mm rain has fallen in last 24h, Ok for watering ( <= ${maxRain24}mm)? $rain24HourOK")
     
-    def rainingNow = (Rain1H >= 0)
-    logDebug ("Is it raining now? ($Rain1H >= 0) ${rainingNow}")
+    def rainingNow = (Rain1H > 0)
+    logDebug ("Is it raining now? ($Rain1H > 0) ${rainingNow}")
     
     if (!state.noDryDays) {state.noDryDays = 0}
     
@@ -259,7 +268,7 @@ def scheduled (evt) {
     		state.noDryDays = state.noDryDays + 1
         	}
         
-   	 	else (!rain24HourOK) {
+   	 	else  {
     		state.noDryDays = 0
         }
 		state.todaysRain = forcastRain
@@ -287,16 +296,12 @@ def scheduled (evt) {
     	if (sprinklerState == "on") { logDebug ("${sprinkler.displayName} already on - no action")
         	
         }
-        
-        
- 
-    	if (sprinklerState == "off") {
-    		logDebug ("${sprinkler.displayName} will run for ${duration}s")
+     	else {
+    		logDebug ("${sprinkler.displayName} will run for ${duration}m")
+			sendNotification ("Automatic water switching on, for ${duration} minutes")
     		switchOn ()
-    		runIn (duration, switchOff)
+    		runIn ((duration * 60), switchOff)
     		}  
-            
-       
         }
     }
 
@@ -316,36 +321,41 @@ def switchOff ()  {
        
     }
 
-def sendNotification (evt) {
+def sendNotification (message) {
 	
     logDebug ("$app.label - Notification handler called")
 	if (notification) {
-    	def message = "$app.label : ${sprinkler.displayName} switched ${sprinkler.currentValue("switch")}"
+    	
    		if (notification) {
-    		log.debug "$app.label Push notification : $message}"
+    		logDebug ("Push notification : $message")
 			notificationDevice.deviceNotification(message)
-        	sendPush(message)} 
+        	sendPush(message)
+		} 
     	if (SMSMessage) {
-    		log.debug "$app.label Texting $SMSNumber - $message"
-    		sendSmsMessage("$SMSNumber", message)}
-        }
-        }
+    		logDebug ("Texting $SMSNumber - $message")
+    		sendSmsMessage("$SMSNumber", message)
+		}
+		if (speach) {
+			speach.speak (message)
+		}
+	}
+}
    
 def sprinklerStatus ()  {    
     logDebug ("${sprinkler.displayName} is now ${sprinkler.currentValue("switch")}")    
     if (state.command != sprinkler.currentValue("switch")){
     	log.error "$app.label - ${sprinkler.displayName} did not switch $state.command"
         if (state.command == "off"){
-        	log.debug "$app.label : ${sprinkler.displayName} sending off command again"
+        	logDebug ("${sprinkler.displayName} sending off command again")
         	switchOff ()}
         else {
-        	log.debug "$app.label : ${sprinkler.displayName} sending on command again"
+        	logDebug ("${sprinkler.displayName} sending on command again")
         	switchOn ()}        
         }
     }
 
 def logDebug (text) {
-	if (text){
+	if (detailedLog){
     	log.debug "$text"
         }
     }
